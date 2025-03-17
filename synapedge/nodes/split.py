@@ -1,0 +1,90 @@
+# Copyright (C) 2025 Asad Shafi
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# For issues and contributions, visit:
+# https://github.com/asad-shafi/synapedge
+# ============================================================================
+
+from typing import IO, List, Dict, Any
+from io import StringIO
+import nodes.helperfunc as helperfunc
+
+def _write_split_function(buffer: StringIO, func_name: str, inputs: List[str], outputs: List[str], attrs: Dict[str, Any], tensor_shape: Dict[str, Any]) -> None:
+    """Generates C code for the ONNX split operator.
+    Raises:
+        ValueError: If there are less than two outputs, inputs are insufficient, or split tensor is invalid.
+    """
+    if len(outputs) < 2:
+        raise ValueError("Split must have at least 2 outputs")
+    if len(inputs) < 2:
+        raise ValueError("Split requires two inputs: data and split")
+
+    axis = attrs.get('axis', 0)
+    data_input = inputs[0]
+    split_input = inputs[1]
+    input_shape = tensor_shape.get(data_input, [])
+    split_shape = tensor_shape.get(split_input, [])
+    rank = len(input_shape)
+
+    # Validate split tensor
+    if len(split_shape) != 1 or split_shape[0] != len(outputs):
+        raise ValueError("Split input must be 1D with length equal to number of outputs")
+
+    helperfunc._write_function_signature(buffer, func_name, inputs, outputs, tensor_shape)
+    buffer.write(f"    // Split along axis={axis}\n")
+    #buffer.write(f"    const float* input_data = (const float*){data_input};\n")
+    buffer.write(f"    const int64_t* split = (const int64_t*){split_input};\n")
+
+    for k in range(len(outputs)):
+        output_name = outputs[k]
+        buffer.write(f"    // Processing output {k}: {output_name}\n")
+
+        # Calculate start index
+        if k == 0:
+            buffer.write(f"    const int64_t start_{k} = 0;\n")
+        else:
+            sum_terms = " + ".join([f"split[{i}]" for i in range(k)])
+            buffer.write(f"    const int64_t start_{k} = {sum_terms};\n")
+        buffer.write(f"    const int64_t split_size_{k} = split[{k}];\n")
+
+        indent = "    "
+        loop_vars = []
+        # Generate nested loops for each dimension
+        for d in range(rank):
+            if d == axis:
+                loop_bound = f"split_size_{k}"
+            else:
+                loop_bound = input_shape[d]
+            buffer.write(f"{indent}for (int i{d} = 0; i{d} < {loop_bound}; i{d}++) {{\n")
+            loop_vars.append(f"i{d}")
+            indent += "    "
+
+        # Generate assignment line with multidimensional indices
+        input_indices = []
+        for d in range(rank):
+            if d == axis:
+                input_idx = f"start_{k} + i{d}"
+            else:
+                input_idx = f"i{d}"
+            input_indices.append(input_idx)
+        input_indices_str = "][".join(input_indices)
+        output_indices_str = "][".join(loop_vars)
+        buffer.write(f"{indent}{output_name}[{output_indices_str}] = {data_input}[{input_indices_str}];\n")
+
+        # Close loops in reverse order
+        for d in reversed(range(rank)):
+            indent = indent[:-4]  # Remove 4 spaces
+            buffer.write(f"{indent}}}\n")
+
+    buffer.write("}\n")
