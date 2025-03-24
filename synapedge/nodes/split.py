@@ -26,9 +26,9 @@ def _write_split_function(buffer: StringIO, func_name: str, inputs: List[str], o
         ValueError: If there are less than two outputs, inputs are insufficient, or split tensor is invalid.
     """
     if len(outputs) < 2:
-        raise ValueError("Split must have at least 2 outputs")
+        raise ValueError(f"Split must have at least 2 outputs {func_name}")
     if len(inputs) < 2:
-        raise ValueError("Split requires two inputs: data and split")
+        raise ValueError(F"Split requires two inputs: data and split {func_name}")
 
     axis = attrs.get('axis', 0)
     data_input = inputs[0]

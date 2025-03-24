@@ -70,13 +70,13 @@ def convert_to_c_array_dtyp(arr, level, c_type):
     
     # Base case: if not a list, it's a number so format it
     if not isinstance(arr, list):
-        return f"{{{float(arr):.9f}f}}"
+        return f"{{{float(arr):.5f}f}}"
 
     # Check if the current list is "flat": no sublists
     if not any(isinstance(item, list) for item in arr):
         # Flat list: format each element on the same line
         if c_type == "float":
-            items = [f"{float(item):.9f}f" for item in arr]# Format as float
+            items = [f"{float(item):.5f}f" for item in arr]# Format as float
         elif c_type == "int":
             items = [f"{int(item)}" for item in arr]# Format as int
         elif c_type == "int64_t":
@@ -104,12 +104,12 @@ def convert_to_c_array(arr, level=0):
     # Base case: if not a list, it's a number so format it
     if not isinstance(arr, list):
         logger.debug(f"Converting number: {arr}")
-        return f"{{{float(arr):.9f}f}}"
+        return f"{{{float(arr):.5f}f}}"
 
     # Check if the current list is "flat": no sublists
     if not any(isinstance(item, list) for item in arr):
         # Flat list: format each element on the same line
-        items = [f"{float(item):.9f}f" for item in arr]
+        items = [f"{float(item):.5f}f" for item in arr]
         logger.debug(f"Flat list: {items}")
         return "{" + ",".join(items) + "}"
     else:

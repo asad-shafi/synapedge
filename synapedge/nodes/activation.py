@@ -23,6 +23,8 @@ import nodes.helperfunc as helperfunc
 def _write_activation_function(functions: Dict[str, Any], buffer: StringIO, op_type: str, func_name: str, inputs: List[str], outputs: List[str], attrs: Dict[str, Any], tensor_shape: Dict[str, Any]) -> None:
     """Generates C code for activation functions (ReLU, Sigmoid, etc.).
     """
+    # abs to calculate sigmoid, it might be faster than exp
+    abs = True
     input_name = inputs[0]
     output_name = outputs[0]
     input_shape = tensor_shape.get(input_name, [])

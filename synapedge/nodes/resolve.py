@@ -31,6 +31,7 @@ import nodes.pooling
 import nodes.pow
 import nodes.reshape
 import nodes.resize
+import nodes.slice
 import nodes.softmax
 import nodes.split
 import nodes.transpose
@@ -54,7 +55,7 @@ def _dispatch_operator_handler(functions: Dict[str, Any], buffer: StringIO, op_t
     elif op_type_lower == "split":
         nodes.split._write_split_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
     elif op_type_lower == "slice":
-        nodes._write_slice_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
+        nodes.slice._write_slice_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
     elif op_type_lower == "transpose":
         nodes.transpose._write_transpose_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
     elif op_type_lower == "softmax":

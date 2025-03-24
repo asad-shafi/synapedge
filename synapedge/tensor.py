@@ -226,7 +226,8 @@ def generate_code_from_model(model, model_filename):
         c_type = helpers.get_c_type_from_elem_type(init.data_type)
         #formatted_array = helpers.format_array(arr, indent=0)
         c_array_string = helpers.convert_to_c_array_dtyp(arr,0,c_type)
-        min_max = f"// min: {arr.min()}, max: {arr.max()} \n"
+        if arr.size > 0:
+            min_max = f"// min: {arr.min()}, max: {arr.max()} \n"
         #weights_lines.append(f"static const {c_type} tensor_{helperfunc._sanitize_name(init_name)}{shape_str} =\n{c_array_string};\n")
         array_declaration = (f"{min_max}static const {c_type} tensor_{helperfunc._sanitize_name(init_name)}"f"{shape_str} =\n{c_array_string};\n")
         weights_chunk += array_declaration
