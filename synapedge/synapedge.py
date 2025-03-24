@@ -57,9 +57,9 @@ def main(model_path, output_path, verbose, optimizations):
     else:
         logger.info("No optimizations applied.")
 
-    logger.info(f"Converting ONNX model: {model_path}")
+    print(f"Converting ONNX model: {model_path}")
     graph.parse(model_path, output_path, output_path, verbose=verbose, optimizations=optimizations)
-    logger.info(f"Saving generated C code to: {output_path}")
+    print(f"Saving generated C code to: {output_path}")
 
     if verbose:
         logger.info("Conversion completed successfully.")
@@ -99,7 +99,6 @@ if __name__ == "__main__":
         log_level = logging.WARNING
     elif args.verbose > 2:
         log_level = logging.DEBUG
-    print(log_level)
 
     logging.basicConfig(level=log_level, format='[%(levelname)s] %(message)s')
 
