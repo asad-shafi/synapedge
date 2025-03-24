@@ -36,6 +36,7 @@ def _write_convolution_function(buffer: StringIO, func_name: str, inputs: List[s
     min_inputs = 2  # Input and kernel
     has_bias = len(inputs) >= 3
     if len(inputs) < min_inputs or len(outputs) != 1:
+        raise ValueError("Invalid input/output count for convolution function")
         buffer.write("#error Invalid number of inputs/outputs\n")
         return
 
@@ -53,17 +54,21 @@ def _write_convolution_function(buffer: StringIO, func_name: str, inputs: List[s
         K, C_in_kernel, K_h, K_w = kernel_dims
         N_out, C_out, H_out, W_out = output_dims
     except (KeyError, ValueError) as e:
+        raise ValueError(f"Invalid tensor dimensions: {str(e)}")
         buffer.write(f"#error Invalid tensor dimensions: {str(e)}\n")
         return
 
     # Dimension validation
     if C_in != C_in_kernel:
+        raise ValueError(f"error Input channel mismatch: {C_in} vs {C_in_kernel}")
         buffer.write(f"#error Input channel mismatch: {C_in} vs {C_in_kernel}\n")
         return
     if C_out != K:
+        raise ValueError(f"error Output channel mismatch: {C_out} vs {K}")
         buffer.write(f"#error Output channel mismatch: {C_out} vs {K}\n")
         return
     if N != N_out:
+        raise ValueError(f"error Batch size mismatch: {N} vs {N_out}")
         buffer.write(f"#error Batch size mismatch: {N} vs {N_out}\n")
         return
 
@@ -74,6 +79,7 @@ def _write_convolution_function(buffer: StringIO, func_name: str, inputs: List[s
             if len(bias_dims) != 1 or bias_dims[0] != K:
                 raise ValueError
         except (KeyError, ValueError):
+            raise ValueError(f"Invalid bias tensor dimensions: {bias_name}")
             buffer.write(f"#error Bias must be 1D tensor with {K} elements\n")
             return
 
