@@ -26,10 +26,168 @@ import numpy as np
 import helpers as helpers
 from nodes import helperfunc 
 import logging
-from typing import List
  
 
 logger = logging.getLogger(__name__)
+
+# -----------------------------
+# Helpers for finding nodes that use an initializer
+# -----------------------------
+def find_nodes_using_initializer(graph, init_name):
+    """Return list of nodes in graph that have init_name in node.input."""
+    return [node for node in graph.node if init_name in node.input]
+
+def conv_quantize_w(node, init_name,initializers):
+    """
+    ONNX Conv schema: input[0]=X, input[1]=W, input[2]=B (optional)
+    """
+    #x = node.input[0] we are only quantizing weights here
+    if initializers is not None:
+        arr = numpy_helper.to_array(initializers) # extract weights
+        q_w = quantize_conv_weight_per_channel(arr, num_bits=8)
+        #print(q_w)
+    else:
+    # handle missing initializer
+        raise ValueError(f"Weight array is empty at {init_name}")
+    return q_w
+
+def conv_quantize_input(node, init_name,initializers):
+    """
+    ONNX Conv schema: input[0]=X, input[1]=W, input[2]=B (optional)
+    Return True if init_name is the Conv weight for this node.
+    """
+    #x = node.input[0] we are only quantizing weights here
+    weight_name = node.input[1]
+    weight_name_init= initializers.get(weight_name)
+    if weight_name_init is not None:
+        arr = numpy_helper.to_array(weight_name_init) # extract weights
+        q_w = quantize_conv_weight_per_channel(arr, num_bits=8)
+        #print(q_w)
+    else:
+    # handle missing initializer
+        raise ValueError 
+
+    if len(node.input) > 2:
+        bias_name = node.input[2]
+        bias_name_init= initializers.get(bias_name) # extract bias
+        arr = numpy_helper.to_array(bias_name_init) # extract bias
+        q_b = quantize_conv_weight_per_channel(arr, num_bits=8)
+
+    else:
+        bias_name = None
+
+    return q_w
+
+
+
+# Function to generate C struct array string
+def generate_c_struct_array(name, qp_dict):
+    n = len(qp_dict['scales'])
+    lines = []
+    lines.append(f"static const quant_param_t q_tensor_{name}[{n}] = {{")
+    for i in range(n):
+        scale = qp_dict['scales'][i]
+        zp = qp_dict['zps'][i]
+        qmin = qp_dict['qmin'][i]
+        qmax = qp_dict['qmax'][i]
+        lines.append(f"    {{{scale:.8f}f, {zp}, {qmin}, {qmax}}},")
+    lines.append("};\n")
+    return "\n".join(lines)
+
+# -----------------------------
+# existing: get_quant_params (keeps your original implementation)
+# -----------------------------
+def get_quant_params(x_float, num_bits=8, symmetric=True, signed=True):
+    x_min = float(np.min(x_float)) if x_float.size > 0 else 0.0
+    x_max = float(np.max(x_float)) if x_float.size > 0 else 0.0
+    #print(f"min: {x_min} max: {x_max}")
+
+    if signed:
+        qmin = - (2 ** (num_bits - 1))
+        qmax = 2 ** (num_bits - 1) - 1
+    else:
+        qmin = 0
+        qmax = 2 ** num_bits - 1
+
+    if symmetric and signed:
+        max_abs = max(abs(x_min), abs(x_max))
+        if max_abs == 0:
+            scale = 1e-8
+        else:
+            scale = max_abs / qmax
+        zp = 0
+    else:
+        if x_max == x_min:
+            scale = 1e-8
+        else:
+            scale = (x_max - x_min) / (qmax - qmin)
+        zp = int(round(qmin - x_min / scale))
+        zp = int(np.clip(zp, qmin, qmax))
+
+    return float(scale), int(zp), int(qmin), int(qmax)
+
+def quantize(x, scale, zp, qmin, qmax, dtype=None):
+    q = np.round(x / scale + zp)
+    q = np.clip(q, qmin, qmax).astype(np.int32)
+    if dtype is not None:
+        q = q.astype(dtype)
+    return q
+# -----------------------------
+# Quantize conv weights per out-channel (symmetric int8)
+# -----------------------------
+def quantize_conv_weight_per_channel(w_float, num_bits=8):
+    """
+    Args:
+      w_float: numpy array for Conv weights, expected shape (out_ch, in_ch, kH, kW, ...) or at least out_ch on axis 0
+      num_bits: bits for quantization (default 8 -> int8)
+    Returns:
+      q_w: int8 numpy array same shape as w_float
+      scales: float32 numpy array shape (out_ch,)
+      zps: int32 numpy array shape (out_ch,) - usually zeros for symmetric signed
+    """
+    if not isinstance(w_float, np.ndarray):
+        w = np.array(w_float, dtype=np.float32)
+    else:
+        w = w_float.astype(np.float32)
+
+    if w.ndim < 1:
+        # scalar or invalid, fall back to per-tensor quantization
+        channel_count = 1
+        w_reshaped = w.reshape((1, -1))
+    else:
+        channel_count = w.shape[0]
+
+    scales = np.zeros((channel_count,), dtype=np.float32)
+    zps = np.zeros((channel_count,), dtype=np.int32)
+    q_min = np.zeros((channel_count,), dtype=np.int32)
+    q_max = np.zeros((channel_count,), dtype=np.int32)
+    q_w = np.zeros_like(w, dtype=np.int8)
+
+    for oc in range(channel_count):
+        channel_vals = w[oc]
+        #print(channel_vals)
+        scale, zp, qmin, qmax = get_quant_params(channel_vals, num_bits=num_bits, symmetric=True, signed=True)
+        #print(scale)
+        if scale == 0:
+            scale = 1e-8
+        scales[oc] = float(scale)
+        zps[oc] = int(zp)
+        q_min[oc] = qmin
+        q_max[oc] = qmax
+
+        # quantize then reshape back
+    #q = np.round(channel_vals / scale).astype(np.int32)
+    #    q = np.clip(q, qmin, qmax).astype(np.int8)
+    #    q_w[oc] = q.reshape(w[oc].shape)
+        #print(f"w_ch:{channel_vals.shape}")
+
+        q_w[oc] =  quantize(x=channel_vals,scale=scale,zp=zp,qmin=qmin,qmax=qmax,dtype=None)
+        #print(q_w)
+    
+
+    return  {"q_w": q_w,"scales": scales,"zps": zps,"qmin": q_min,"qmax": q_max,}
+
+
 # -------------------------------------------------------------------
 # Main function: Generate Code header and source code pieces from an ONNX model.
 def generate_code_from_model(model, model_filename):
@@ -55,7 +213,6 @@ def generate_code_from_model(model, model_filename):
     # -------------------------------------------------------------------
     # Collect tensor information for node outputs.
     tensor_info = {}
-
     for node_idx, node in enumerate(nodes): 
         if not node.name:
             logger.warning(f"Node {node.op_type} at index {node_idx} does not have a name. replacing with {node.op_type}_{node_idx}")
@@ -63,8 +220,7 @@ def generate_code_from_model(model, model_filename):
         node_id = node.name if node.name else node.op_type
         #print(f"{node}--{node.name}-->{node.op_type}")
         for out_idx, output_name in enumerate(node.output):
-            #gen_name = f"tensor_{node_id}_Output_{out_idx}"
-            gen_name = f"tensor_{output_name}"#_Output_{out_idx}"
+            gen_name = f"tensor_{node_id}_Output_{out_idx}"
             tensor_info[gen_name] = {
                 'producer': node_idx,
                 'consumers': tensor_consumers.get(output_name, []),
@@ -79,7 +235,6 @@ def generate_code_from_model(model, model_filename):
             'consumers': tensor_consumers.get(init_name, []),
             'original': init_name,
         }
-    
     # -------------------------------------------------------------------
     # Helper: Retrieve tensor shape from value_info, graph inputs/outputs, or initializer.
     def get_shape(info):
@@ -121,8 +276,7 @@ def generate_code_from_model(model, model_filename):
                 return helpers.get_c_type_from_elem_type(out.type.tensor_type.elem_type)
         if original in initializers:
             return helpers.get_c_type_from_elem_type(initializers[original].data_type)
-        else:
-            return "unkown"
+        return "float"
 
     # Compute lifetimes (start/end indices) for each tensor.
     tensor_intervals = {}
@@ -205,7 +359,7 @@ def generate_code_from_model(model, model_filename):
     for group_idx, group in enumerate(union_groups):
         for tensor in group:
             union_mapping[tensor['original']] = f"tu{group_idx}.{tensor['name']}"
-
+#================================================================================#
     # Extract weight arrays from initializers.
     # Maximum chunk size in bytes (5MB)
     MAX_CHUNK_SIZE = 5 * 1024 * 1024  
@@ -217,26 +371,53 @@ def generate_code_from_model(model, model_filename):
     # Dictionary of initializers    
     for init_name, init in initializers.items():
         arr = numpy_helper.to_array(init)
+        accredited_nodes = find_nodes_using_initializer(graph, init_name)
+        # what if an init is used by two nodes
+        quantized = False
+        for node in accredited_nodes:
+            #print(f"  → Used in node: {node.name} ({node.op_type})")
+            #node.input
+            if node.op_type == "Conv" and node.input[1] == init_name: # type is conv and input is weight, quantize bias at runtime
+                #t = initializers['model.0.conv.weight']
+                
+                q_w = conv_quantize_w(node, init_name,init)
+                
+                
+                #c_array_string = helpers.convert_to_c_array_dtyp(q_w['q_w'],0,'uint8')
+                quantized = True
+                break
+                #print(c_array_string)
+
+                #print(q_w['q_w'])
+
+                # q_w, scales, zps = quantize_conv_weight_per_channel(arr, num_bits=8)
+                #print(f"q_w:{q_w} scales:{scales} zps:{zps}")
 
         
-        #print(f"---------------{init_name}")
-        #print(arr.max())
-        #print(arr.min())
-        #arr_size_bytes = arr.nbytes
-        #print(f"------------{arr.size}------------- ")
-        #print(arr)
+
         if arr.shape == () and arr.size == 1:
             shape_str = "[1]"
         else:
             shape_str = "".join(f"[{dim}]" for dim in arr.shape)
-        #shape_str = "".join(f"[{dim}]" for dim in arr.shape)
-        c_type = helpers.get_c_type_from_elem_type(init.data_type)
-        #formatted_array = helpers.format_array(arr, indent=0)
-        c_array_string = helpers.convert_to_c_array_dtyp(arr,0,c_type)
-        if arr.size > 0:
-            min_max = f"// min: {arr.min()}, max: {arr.max()} \n"
-        #weights_lines.append(f"static const {c_type} tensor_{helperfunc._sanitize_name(init_name)}{shape_str} =\n{c_array_string};\n")
-        array_declaration = (f"{min_max}static const {c_type} tensor_{helperfunc._sanitize_name(init_name)}"f"{shape_str} =\n{c_array_string};\n")
+
+        if quantized == False:
+            #shape_str = "".join(f"[{dim}]" for dim in arr.shape)
+            c_type = helpers.get_c_type_from_elem_type(init.data_type)
+            #formatted_array = helpers.format_array(arr, indent=0)
+            c_array_string = helpers.convert_to_c_array_dtyp(arr,0,c_type)
+            if arr.size > 0:
+                min_max = f"// min: {arr.min()}, max: {arr.max()} \n"
+            #weights_lines.append(f"static const {c_type} tensor_{helperfunc._sanitize_name(init_name)}{shape_str} =\n{c_array_string};\n")
+            array_declaration = (f"{min_max}static const {c_type} tensor_{helperfunc._sanitize_name(init_name)}"f"{shape_str} =\n{c_array_string};\n")
+            
+        else:
+            if arr.size > 0:
+                min_max = f"// min: {arr.min()}, max: {arr.max()} \n"
+            c_array_string = helpers.convert_to_c_array_dtyp_q(q_w['q_w'],0,'int8')
+            struct=generate_c_struct_array(helperfunc._sanitize_name(init_name),q_w)
+            array_declaration = (f"{min_max}static const int8 tensor_{helperfunc._sanitize_name(init_name)}"f"{shape_str} =\n{c_array_string};\n")
+            array_declaration += struct
+
         weights_chunk += array_declaration
         arr_size_bytes = len(array_declaration)
         if current_chunk_size > MAX_CHUNK_SIZE:
@@ -280,8 +461,7 @@ def generate_code_from_model(model, model_filename):
     fp_lines.append(forward_pass_signature)
     fp_lines.append("{")
     for node in nodes:
-        name = f"node_{(node.name)}"
-        node_fn = f"{helperfunc._sanitize_name(name) if node.name else helperfunc._sanitize_name(node.op_type)}"
+        node_fn = f"node_{helperfunc._sanitize_name(node.name) if node.name else helperfunc._sanitize_name(node.op_type)}"
         args = []
         # Process inputs
         for in_name in node.input:

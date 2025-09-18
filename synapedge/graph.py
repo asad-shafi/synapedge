@@ -23,6 +23,7 @@ from io import StringIO
 from typing import List, Dict, Any
 import onnx
 import tensor as tensor
+import tensor_quantize as tensor_quantize
 
 import helpers as helpers
 import nodes.helperfunc as helperfunc
@@ -88,6 +89,7 @@ def generate_c_file(functions: List[Dict[str, Any]], output_c_path: str,header_d
             func['inputs'] = [helperfunc._sanitize_name(i) for i in inputs] # Sanitize input names directly in func['inputs']
             func['outputs'] = [helperfunc._sanitize_name(o) for o in outputs] # Sanitize output names directly in func['outputs']
             #func['intermediate_tensors_shape'] = [helperfunc._sanitize_name(t) for t in tensor] # Sanitize output names directly in func['outputs']
+            func['computed_shape'] = ""
 
 
             #print(func)
@@ -97,6 +99,10 @@ def generate_c_file(functions: List[Dict[str, Any]], output_c_path: str,header_d
 
 
             buffer.write("\n")  # Add spacing between functions
+            with open("D:\Synapegde-gen-code\output.txt", "w") as f:
+              for item in functions:
+               f.write(f"{item}\n")
+            #print(functions)
 
     # Get final string and close buffer
     result = buffer.getvalue()
@@ -121,22 +127,35 @@ def parse(onnx_model_path: str, output_c_path: str,output_file_name: str ,verbos
     logger.info(f"Opset Version:, {model.opset_import[0].version}")
     logger.info(f"Graph Name:, {model.graph.name}")
     
-    if model.producer_name == "onnx.quantize":
-       raise ValueError("Quantized models are not supported.")
-    #Generate header file
+    #if model.producer_name == "onnx.quantize":
+    #  raise ValueError("Quantized models are not supported.")
+    #if(optimizations[0] == 'quantize_8'):
+    #  header_lines, source_lines, weights_tensors,header_directrives = tensor_quantize.generate_code_from_model(model=model,model_filename=output_c_path)
+      #print(optimizations)
+    #else:
+      #Generate header file
     header_lines, source_lines, weights_tensors,header_directrives = tensor.generate_code_from_model(model=model,model_filename=output_c_path)
-
+    #print(header_lines)
 
     # Extract computational graph nodes 
     functions = []
     _extract_functions_from_graph(model.graph, functions)
 
-
-
     # Generate C code
+    computed_shape = [] # when node does not have shape we calculate it. specially inquantized model
     c_code = generate_c_file(functions, output_c_path,header_directrives)
+    for i in range(len(functions)):
+      if functions[i]['computed_shape'] != '':
+        computed_shape.append( functions[i]['computed_shape'])
+    header_lines = "".join(header_lines)
+
+    updated = helpers.replace_union_declarations_all(header_lines, computed_shape)
+    pattern = r"unkown\s+(\w+)\s*\[\]\s*;"
+
     c_code = c_code + "\n".join(source_lines) 
-          
+    matches = re.findall(pattern, header_lines)
+    
+    header_lines = updated
     #base_name = os.path.splitext(os.path.basename(model_path))[0]
     #header_filename = f"/content/{base_name}.h"
     save_to_file(c_code, output_c_path)
@@ -157,8 +176,16 @@ def _extract_functions_from_graph(graph, functions: List) -> None:
     output_shapes = {}
     for input in graph.input:
         input_shapes[input.name] = [dim.dim_value for dim in input.type.tensor_type.shape.dim]
+
+        input_type_proto = input.type.tensor_type
+        elem_type = input_type_proto.elem_type
+        input_shapes[input.name+"_dtype"]=helpers.get_c_type_from_elem_type(elem_type)
     for output in graph.output:
         output_shapes[output.name] = [dim.dim_value for dim in output.type.tensor_type.shape.dim]
+
+        output_type_proto = output.type.tensor_type
+        elem_type = output_type_proto.elem_type
+        output_shapes[output.name+"_dtype"]=helpers.get_c_type_from_elem_type(elem_type)
     #print(input_shapes)
     #print(output_shapes)
     weights_dict = {}
@@ -215,10 +242,11 @@ def _extract_functions_from_graph(graph, functions: List) -> None:
             func['intermediate_tensors_shape'][helperfunc._sanitize_name(output)+"_dtype"] = weights_dict[output+"_dtype"]
           elif output in output_shapes:
             func['intermediate_tensors_shape'][helperfunc._sanitize_name(output)] = output_shapes[output]
+            func['intermediate_tensors_shape'][helperfunc._sanitize_name(output)+"_dtype"] = output_shapes[output+"_dtype"]
           else :
              logger.info(f"unknown shap in output at :{node.name}")  
 
-        for input in node.input:
+        for input in node.input:   
           if input in intermediate_tensors:
             func['intermediate_tensors_shape'][helperfunc._sanitize_name(input)] = intermediate_tensors[input]
             func['intermediate_tensors_shape'][helperfunc._sanitize_name(input)+"_dtype"] = intermediate_tensors[input+"_dtype"]
@@ -227,6 +255,7 @@ def _extract_functions_from_graph(graph, functions: List) -> None:
             func['intermediate_tensors_shape'][helperfunc._sanitize_name(input)+"_dtype"] = weights_dict[input+"_dtype"]
           elif input in input_shapes:
             func['intermediate_tensors_shape'][helperfunc._sanitize_name(input)] = input_shapes[input]
+            func['intermediate_tensors_shape'][helperfunc._sanitize_name(input)+"_dtype"] = input_shapes[input+"_dtype"]
           else :
             logger.info(f"unknown shap in input at :{node.name}")
         functions.append(func)

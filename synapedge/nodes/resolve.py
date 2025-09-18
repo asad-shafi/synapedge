@@ -16,6 +16,7 @@
 # https://github.com/asad-shafi/synapedge
 # ============================================================================
 
+import imp
 import nodes as nodes
 from typing import IO, List, Dict, Any
 from io import StringIO
@@ -35,11 +36,34 @@ import nodes.slice
 import nodes.softmax
 import nodes.split
 import nodes.transpose
+import nodes.gather
+import nodes.constant
+import nodes.reducemean
+import nodes.sqrt
+import nodes.neg
+import nodes.unsqueeze
+import nodes.cast
+import nodes.trigno
+import nodes.expand
+import nodes.equal
+import nodes.where
+import nodes.scatternd
+import nodes.layernormalization
+import nodes.squeeze
+import nodes.erf
+
+import nodes.QuantizeLinear
+import nodes.dequantizelinear
+import nodes.QLinearConv
+import nodes.qlinearactivation
+import nodes.qlinearelementwise
+import nodes.qlinearconcat
 
 def _dispatch_operator_handler(functions: Dict[str, Any], buffer: StringIO, op_type: str, func_name: str, inputs: List[str], outputs: List[str], attrs: Dict[str, Any], tensor_shape: Dict[str, Any]) -> None:
     
     """Dispatch to the appropriate operator handler based on the ONNX operator type."""
     op_type_lower = op_type.lower()  # Convert to lowercase for case-insensitive comparison
+    #print(op_type_lower)
     if op_type_lower in ["conv", "convtranspose"]:
         nodes.convolution._write_convolution_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
     elif op_type_lower in ["relu", "sigmoid", "tanh"]:
@@ -77,7 +101,7 @@ def _dispatch_operator_handler(functions: Dict[str, Any], buffer: StringIO, op_t
     elif op_type_lower == "clip":
         nodes._write_clip_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
     elif op_type_lower == "gather":
-        nodes._write_gather_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
+        nodes.gather._write_gather_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
     elif op_type_lower in ["upsample", "resize"]:  # Combine upsample and resize
         nodes.resize._write_resize_function(buffer, func_name, inputs, outputs, attrs, op_type,tensor_shape)  # Pass op_type for specific handling
     elif op_type_lower == "constant":
@@ -85,11 +109,13 @@ def _dispatch_operator_handler(functions: Dict[str, Any], buffer: StringIO, op_t
     elif op_type_lower == "constantofshape":
         nodes._write_constant_of_shape_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
     elif op_type_lower == "expand":
-        nodes._write_expand_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
+        nodes.expand._write_expand_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
     elif op_type_lower == "squeeze":
-        nodes._write_squeeze_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
+        nodes.squeeze._write_squeeze_node(buffer, func_name, inputs, outputs, attrs,tensor_shape)
+    elif op_type_lower == "erf":
+        nodes.erf._write_erf_node(buffer, func_name, inputs, outputs, attrs,tensor_shape)
     elif op_type_lower == "unsqueeze":
-        nodes._write_unsqueeze_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
+        nodes.unsqueeze._write_unsqueeze_node(buffer, func_name, inputs, outputs, attrs,tensor_shape)
     elif op_type_lower == "shape":
         nodes._write_shape_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
     elif op_type_lower == "range":
@@ -108,10 +134,33 @@ def _dispatch_operator_handler(functions: Dict[str, Any], buffer: StringIO, op_t
         nodes._write_matmul_integer_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
     elif op_type_lower == "pow":
         nodes.pow._write_pow_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
+
+    elif op_type_lower == "equal":
+        nodes.equal._write_equal_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
+    elif op_type_lower == "where":
+        nodes.where._write_where_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
+    elif op_type_lower == "layernormalization":
+        nodes.layernormalization._write_layernormalization_node(buffer, func_name, inputs, outputs, attrs,tensor_shape)
+
     elif op_type_lower == "dynamicquantizelinear":
         nodes._write_dynamic_quantize_linear_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
     elif op_type_lower == "spatialfilter":
         nodes._write_spatial_filter_function(buffer, func_name, inputs, outputs, attrs,tensor_shape)
+    #-------------------------Quant func-------------------------------------------
+    elif op_type_lower == "quantizelinear":
+        nodes.QuantizeLinear._write_quantizelinear_function(functions,buffer, func_name, inputs, outputs, attrs,tensor_shape)
+    elif op_type_lower == "qlinearconv":
+        nodes.QLinearConv._write_qlinearconvolution_function(functions,buffer, func_name, inputs, outputs, attrs,tensor_shape)
+    elif op_type_lower == "dequantizelinear":
+        nodes.dequantizelinear._write_dequantizelinear_function(functions,buffer, func_name, inputs, outputs, attrs,tensor_shape)
+
+    elif op_type_lower in ["qlinearrelu", "qlinearsigmoid", "tanh"]:
+        nodes.qlinearactivation._write_qlinearactivation_function(functions,buffer,op_type, func_name, inputs, outputs, attrs,tensor_shape)
+    elif op_type_lower in ["qlinearadd", "qlinearsub", "qlinearmul", "qlineardiv"]:
+        nodes.qlinearelementwise._write_qlinearelementwise_function(functions,buffer,op_type, func_name, inputs, outputs, attrs,tensor_shape)
+    elif op_type_lower == "qlinearconcat":
+        nodes.qlinearconcat._write_qlinearconcat_function(functions,buffer, func_name, inputs, outputs, attrs,tensor_shape)
+
     elif op_type_lower in ["cast", "convinteger", "pooling"]:  # Placeholder for combined ops
         nodes._write_generic_stub(buffer, func_name, inputs, outputs, attrs, op_type,tensor_shape)  # Pass op_type for info
     else:

@@ -20,12 +20,18 @@ from typing import IO, List, Dict, Any
 from io import StringIO
 import nodes.helperfunc as helperfunc
 
-def _write_activation_function(functions: Dict[str, Any], buffer: StringIO, op_type: str, func_name: str, inputs: List[str], outputs: List[str], attrs: Dict[str, Any], tensor_shape: Dict[str, Any]) -> None:
+def _write_qlinearactivation_function(functions: Dict[str, Any], buffer: StringIO, op_type: str, func_name: str, inputs: List[str], outputs: List[str], attrs: Dict[str, Any], tensor_shape: Dict[str, Any]) -> None:
     """Generates C code for activation functions (ReLU, Sigmoid, etc.).
     """
     # abs to calculate sigmoid, it might be faster than exp
     abs = True
     input_name = inputs[0]
+    X_scale = inputs[1] 
+    X_zero_point = inputs[2] 
+    y_scale = inputs[3] 
+    y_zero_point = inputs[4]   
+
+
     output_name = outputs[0]
     input_shape = tensor_shape.get(input_name, [])
     output_shape = tensor_shape.get(output_name, [])
@@ -38,7 +44,6 @@ def _write_activation_function(functions: Dict[str, Any], buffer: StringIO, op_t
         # Update 'outputs[0]' in functions
         for i in range(len(functions)):  # Iterate using index
             func = functions[i]  # Get function dictionary by index
-            print(func)
             if helperfunc._sanitize_name(func['name']) == func_name: # Update output shape of the producer node (or curent node)
                 functions[i]['intermediate_tensors_shape'][outputs[0]] = output_shape  # Update using index
             for ins in func['inputs']:

@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 def _sanitize_name(name: str) -> str:
     """Replace invalid characters (e.g., '/') in names with underscores and print replacements."""
     sanitized_name = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+        # Collapse two or more consecutive underscores into a single underscore
+    sanitized_name = re.sub(r'_{2,}', '_', sanitized_name)
     # Check if any character was replaced
     if sanitized_name != name:
         logger.debug(f"Replaced invalid characters in '{name}' -> '{sanitized_name}' with underscore")
@@ -51,7 +53,8 @@ def _write_function_signature(buffer: StringIO, func_name: str, inputs: List[str
     # Generate input arguments
     for input_name in inputs:
         tensors = tensors_shape.get(input_name, None)
-        tensors_dtype = tensors_shape.get(input_name+"_dtype", "float")
+
+        tensors_dtype = tensors_shape.get(input_name+"_dtype", "floatt")
         if input_name.isdigit(): # show warning if input name is a number
             logger.warning(f"Input name {input_name} is a number, it should be a string, replacing with tensor_{input_name}")
             input_name = f"tensor_{input_name}"
@@ -78,5 +81,6 @@ def _write_function_signature(buffer: StringIO, func_name: str, inputs: List[str
     #output_args = [f"float* {output_name}" for output_name in outputs]
     # Combine inputs and outputs
     all_args = ", ".join(input_args + output_args)
+    temp = f"node_{func_name}"
     # Write the function signature
-    buffer.write(f"void node_{func_name}({all_args}) {{\n")
+    buffer.write(f"void {_sanitize_name(temp)}({all_args}) {{\n")

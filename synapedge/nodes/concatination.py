@@ -20,7 +20,107 @@ from typing import IO, List, Dict, Any
 from io import StringIO
 import nodes.helperfunc as helperfunc
 
-def _write_concat_function(buffer: StringIO, func_name: str, inputs: List[str], outputs: List[str], attrs: Dict[str, Any], tensor_shape: Dict[str, Any]) -> None:
+def _write_concat_function(buffer: StringIO, func_name: str, inputs: List[str], outputs: List[str],
+                           attrs: Dict[str, Any], tensor_shape: Dict[str, Any]) -> None:
+    """Generates C code for the ONNX Concat operator using a single loop group
+    and an if/else chain in the innermost loop to pick the source input.
+    """
+    axis = attrs.get('axis', 0)
+
+    if len(inputs) < 2:
+        raise ValueError("Concat operator requires at least two input tensors.")
+
+    first_shape = tensor_shape[inputs[0]]
+    rank = len(first_shape)
+
+    # normalize negative axis
+    if axis < 0:
+        axis += rank
+
+    # validate shapes (all dims except axis must match)
+    for inp in inputs[1:]:
+        shape = tensor_shape[inp]
+        if len(shape) != rank:
+            raise ValueError(f"All inputs must have same number of dimensions. {inp} has {len(shape)} != {rank}.")
+        for d in range(rank):
+            if d == axis:
+                continue
+            if shape[d] != first_shape[d]:
+                raise ValueError(
+                    f"Mismatch in dimension {d} for input '{inp}'. Expected {first_shape[d]}, got {shape[d]}."
+                )
+
+    # output shape (assume single output)
+    out_name = outputs[0]
+    out_shape = tensor_shape[out_name]
+
+    # compute sizes along concat axis and offsets
+    axis_sizes = [tensor_shape[inp][axis] for inp in inputs]
+    offsets = []
+    cum = 0
+    for s in axis_sizes:
+        offsets.append(cum)
+        cum += s
+
+    # Write signature and comment
+    helperfunc._write_function_signature(buffer, func_name, inputs, outputs, tensor_shape)
+    helperfunc._write_c_comment(buffer, f"Concat along axis={axis} (single loop with innermost if-chain)", indent=4)
+
+    # Optionally write the axis sizes / offsets as const arrays (not necessary, but useful for debugging)
+    n_inputs = len(inputs)
+    sizes_list = ", ".join(str(s) for s in axis_sizes)
+    offs_list = ", ".join(str(o) for o in offsets)
+    buffer.write(f"    const int input_axis_sizes[{n_inputs}] = {{ {sizes_list} }};\n")
+    buffer.write(f"    const int input_axis_offsets[{n_inputs}] = {{ {offs_list} }};\n\n")
+
+    # Single nested loops over the output tensor
+    loop_indices = []
+    indent = "    "
+    for d in range(rank):
+        idx = f"i{d}"
+        loop_indices.append(idx)
+        dim_size = out_shape[d]
+        buffer.write(f"{indent}for (int {idx} = 0; {idx} < {dim_size}; {idx}++) {{\n")
+        indent += "    "
+
+    # Build the output index string like [i0][i1][i2]...
+    output_indices = "".join(f"[{idx}]" for idx in loop_indices)
+
+    # Innermost: choose which input to read from based on i{axis}
+    idx_axis = f"i{axis}"
+    # Start if/else if chain
+    for k, inp in enumerate(inputs):
+        off = offsets[k]
+        sizek = axis_sizes[k]
+        cond = f"{idx_axis} >= {off} && {idx_axis} < {off + sizek}"
+        if k == 0:
+            buffer.write(f"{indent}if ({cond}) {{\n")
+        else:
+            buffer.write(f"{indent}else if ({cond}) {{\n")
+
+        # Build input indices: same as output, except for axis we use [i{axis} - offset]
+        input_indices_parts = []
+        for d, idx in enumerate(loop_indices):
+            if d == axis:
+                # use parenthesis to be safe: (iAxis - offset)
+                input_indices_parts.append(f"[{idx} - {off}]")
+            else:
+                input_indices_parts.append(f"[{idx}]")
+        input_indices = "".join(input_indices_parts)
+
+        # assignment
+        buffer.write(f"{indent}    {out_name}{output_indices} = {inp}{input_indices};\n")
+        buffer.write(f"{indent}}}\n")
+
+    # Close all loops
+    for _ in range(rank):
+        indent = indent[:-4]
+        buffer.write(f"{indent}}}\n")
+
+    buffer.write("}\n")
+
+
+def _write_concat_function_loopwise(buffer: StringIO, func_name: str, inputs: List[str], outputs: List[str], attrs: Dict[str, Any], tensor_shape: Dict[str, Any]) -> None:
     """Generates C code for the ONNX Concat operator.
     """
     axis = attrs.get('axis', 0)

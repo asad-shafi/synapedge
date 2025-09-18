@@ -60,13 +60,49 @@ def format_number(x):
 import numpy as np
 
 import numpy as np
+def convert_to_c_array_dtyp_q(arr, level, c_type):
+    import numpy as np
+    # If it's a numpy array, convert to list
+    if isinstance(arr, np.ndarray):
+        arr = arr.tolist()
+        
+    indent = "  " * level  # 2 spaces per level
+
+    # Base case: if not a list, it's a number so format it
+    if not isinstance(arr, list):
+        return f"{float(arr):.5f}f" if c_type == "float" else str(int(arr))
+
+    # Check if the current list is "flat": no sublists
+    if not any(isinstance(item, list) for item in arr):
+        # Flat list: format each element on the same line
+        if c_type == "float":
+            items = [f"{float(item):.5f}f" for item in arr]
+        else:
+            items = [str(int(item)) for item in arr]
+        return "{" + ",".join(items) + "}"
+    else:
+        # Nested lists: keep braces tight with last row, as per ~ format
+        new_line_indent = "  " * (level + 1)
+        inner_strings = []
+        for i, item in enumerate(arr):
+            inner_str = convert_to_c_array_dtyp_q(item, level + 1, c_type)
+            if isinstance(item, list) and not any(isinstance(sub, list) for sub in item):
+                # If it's the last row in a sub-array, put closing brace inline
+                if i == len(arr) - 1:
+                    inner_strings.append(new_line_indent + inner_str )
+                else:
+                    inner_strings.append(new_line_indent + inner_str + ",")
+            else:
+                inner_strings.append(new_line_indent + inner_str + ("," if i != len(arr) - 1 else ""))
+        return "{" + "\n" + "\n".join(inner_strings) + "\n" + indent + "}"
+
 
 def convert_to_c_array_dtyp(arr, level, c_type):
     # If it's a numpy array, convert to list
     if isinstance(arr, np.ndarray):
         arr = arr.tolist()
         
-    indent = "    " * level  # 4 spaces per level
+    indent = "  " * level  # 4 spaces per level
     
     # Base case: if not a list, it's a number so format it
     if not isinstance(arr, list):
@@ -74,10 +110,13 @@ def convert_to_c_array_dtyp(arr, level, c_type):
 
     # Check if the current list is "flat": no sublists
     if not any(isinstance(item, list) for item in arr):
+        #print(c_type)
         # Flat list: format each element on the same line
         if c_type == "float":
             items = [f"{float(item):.5f}f" for item in arr]# Format as float
         elif c_type == "int":
+            items = [f"{int(item)}" for item in arr]# Format as int
+        elif c_type == "uint8" or c_type=="int8" or "int8_t" or "uint8_t":
             items = [f"{int(item)}" for item in arr]# Format as int
         elif c_type == "int64_t":
             items = [f"{int(item)}" for item in arr]# Format as int
@@ -85,10 +124,10 @@ def convert_to_c_array_dtyp(arr, level, c_type):
         return "{" + ",".join(items) + "}"
     else:
         # For nested lists, add newlines and indent for each nested level.
-        new_line_indent = "    " * (level + 1)
+        new_line_indent = "  " * (level + 1)
         inner_strings = []
         for item in arr:
-            inner_str = convert_to_c_array(item, level + 1)
+            inner_str = convert_to_c_array_dtyp(item, level + 1,c_type)
             inner_strings.append(new_line_indent + inner_str)
         # Compose the string with newlines at the start and before the closing brace
         return "{" + "\n" + ",\n".join(inner_strings) + "\n" + indent + "}"
@@ -159,3 +198,67 @@ def _extract_intermediate_tensors_from_graph(graph, intermediate_tensors: List) 
       tensor_name = value_info.name
       tensor_shape = [dim.dim_value for dim in value_info.type.tensor_type.shape.dim]
       intermediate_tensors[tensor_name] = tensor_shape
+
+
+import re
+
+def parse_decl_line(line):
+    m = re.match(r'^\s*(?P<type>\w[\w\d_]*)\s+(?P<name>[A-Za-z_]\w*)(?P<shape>(?:\s*\[[^\]]*\])*)\s*;\s*(?://\s*(?P<comment>.*))?\s*$', line)
+    if not m:
+        return None
+    return {
+        'type': m.group('type'),
+        'name': m.group('name'),
+        'shape': re.sub(r'\s+', '', m.group('shape') or ''),
+        'comment': m.group('comment') or '',
+        'raw': line.rstrip('\n')
+    }
+
+def parse_new_decl(s):
+    m = re.match(r'^\s*(?P<type>\w[\w\d_]*)\s+(?P<name>[A-Za-z_]\w*)(?P<shape>(?:\s*\[[^\]]*\])*)\s*$', s)
+    if not m:
+        return None
+    return {
+        'type': m.group('type'),
+        'name': m.group('name'),
+        'shape': re.sub(r'\s+', '', m.group('shape') or '')
+    }
+
+def replace_union_declarations_all(text, new_decl_list, indent='    '):
+    # Build lookup of new declarations
+    new_map = {}
+    for s in new_decl_list:
+        parsed = parse_new_decl(s)
+        if parsed:
+            new_map[parsed['name']] = parsed
+
+    out = []
+    last_end = 0
+
+    # Find all unions in the text
+    for m in re.finditer(r'(union\s+[A-Za-z_]\w*\s*\{)(.*?)(\}\s*;)', text, flags=re.DOTALL):
+        prefix, body, suffix = m.group(1), m.group(2), m.group(3)
+
+        # Process union body
+        new_body_lines = []
+        for raw_line in body.splitlines():
+            parsed = parse_decl_line(raw_line)
+            if parsed and parsed['name'] in new_map:
+                nd = new_map[parsed['name']]
+                comment = (' // ' + parsed['comment']) if parsed['comment'] else ''
+                new_line = f"{indent}{nd['type']} {nd['name']}{nd['shape']};{comment}"
+                new_body_lines.append(new_line)
+            else:
+                new_body_lines.append(raw_line.rstrip())
+
+        new_body = "\n".join(new_body_lines)
+        updated = prefix + "\n" + new_body + "\n" + suffix
+
+        # Append unchanged text + updated union
+        out.append(text[last_end:m.start()])
+        out.append(updated)
+        last_end = m.end()
+
+    # Append any trailing text
+    out.append(text[last_end:])
+    return "".join(out)

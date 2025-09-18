@@ -51,11 +51,11 @@ def main(model_path, output_path, verbose, optimizations):
     logger.info(f"ONNX Model Path: {model_path}")
     logger.info(f"Output C File Path: {output_path}")
     
-    if optimizations:
-        raise NotImplementedError("Optimizations are not implemented yet")
-        logger.info(f"Applied Optimizations: {', '.join(optimizations)}")
-    else:
-        logger.info("No optimizations applied.")
+    #if optimizations:
+    #    raise NotImplementedError("Optimizations are not implemented yet")
+    #    logger.info(f"Applied Optimizations: {', '.join(optimizations)}")
+    #else:
+    #    logger.info("No optimizations applied.")
 
     print(f"Converting ONNX model: {model_path}")
     graph.parse(model_path, output_path, output_path, verbose=verbose, optimizations=optimizations)
