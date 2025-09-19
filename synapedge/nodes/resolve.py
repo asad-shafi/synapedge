@@ -16,7 +16,6 @@
 # https://github.com/asad-shafi/synapedge
 # ============================================================================
 
-import imp
 import nodes as nodes
 from typing import IO, List, Dict, Any
 from io import StringIO
