@@ -367,6 +367,7 @@ def generate_code_from_model(model, model_filename):
     header_lines.append("")
     header_lines.append("#include <stdint.h>\n")
     header_lines.append("#include <stdbool.h>\n")
+    header_lines.append("#include <math.h>\n")
     header_lines.append("")
     # Add weight arrays
     header_directrives =""
